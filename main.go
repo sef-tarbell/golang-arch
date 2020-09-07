@@ -119,3 +119,26 @@ func createToken(c *UserClaims) (string, error) {
 	}
 	return signedToken, nil
 }
+
+/**
+ * takes a signed token and returns the user claims or an error
+ */
+func parseToken(signedToken string) (*UserClaims, error) {
+	claims := &UserClaims{}
+	t, err := jwt.ParseWithClaims(signedToken, claims, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS512.Alg() {
+			return nil, fmt.Errorf("Invalid signing algorithm")
+		}
+
+		return key, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Error in parseToken while parsing token %w", err)
+	}
+
+	if !t.Valid {
+		return nil, fmt.Errorf("Error in parseToken, invalid token")
+	}
+
+	return t.Claims.(*UserClaims), nil
+}
