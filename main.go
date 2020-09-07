@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
 	"fmt"
 	"io"
-	"log"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -59,25 +61,40 @@ func main() {
 	// http.HandleFunc("/test", testFunc)
 	// http.ListenAndServe(":8080", nil)
 
-	err := generateNewKey()
+	/*
+		err := generateNewKey()
+		if err != nil {
+			panic(err)
+		}
+
+		msg := "This is a message"
+		sig, err := signMessage([]byte(msg))
+		if err != nil {
+			panic(err)
+		}
+
+		match, err := checkSignature([]byte(msg), sig)
+		if err != nil {
+			panic(err)
+		}
+		if match {
+			log.Println("Match")
+		}
+	*/
+
+	key := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	encrypted, salt, err := encryptBytes([]byte("A longer message to encrypt that might show a little more detail"), key)
 	if err != nil {
 		panic(err)
 	}
 
-	msg := "This is a message"
-	sig, err := signMessage([]byte(msg))
+	fmt.Println(string(encrypted))
+
+	decrypted, err := decryptBytes(encrypted, salt, key)
 	if err != nil {
 		panic(err)
 	}
-
-	match, err := checkSignature([]byte(msg), sig)
-	if err != nil {
-		panic(err)
-	}
-	if match {
-		log.Println("Match")
-	}
-
+	fmt.Println(string(decrypted))
 }
 
 /**
@@ -125,6 +142,9 @@ func checkSignature(msg []byte, sig []byte) (bool, error) {
 	return same, nil
 }
 
+/**
+ * creates a new token and returns it
+ */
 func createToken(c *UserClaims) (string, error) {
 	j := jwt.NewWithClaims(jwt.SigningMethodHS512, c)
 	signedToken, err := j.SignedString([]byte(keys[currentKid].key))
@@ -134,7 +154,7 @@ func createToken(c *UserClaims) (string, error) {
 	return signedToken, nil
 }
 
-/**
+/**)
  * takes a signed token and returns the user claims or an error
  */
 func parseToken(signedToken string) (*UserClaims, error) {
@@ -189,4 +209,49 @@ func generateNewKey() error {
 	currentKid = kid.String()
 
 	return nil
+}
+
+func encryptBytes(s, key []byte) ([]byte, []byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Error in encryption: %w", err)
+	}
+
+	iv := make([]byte, aes.BlockSize)
+	_, err = io.ReadFull(rand.Reader, iv)
+
+	stream := cipher.NewOFB(block, iv)
+	buf := &bytes.Buffer{}
+	wtr := cipher.StreamWriter{
+		S: stream,
+		W: buf,
+	}
+
+	_, err = wtr.Write(s)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Error in encryption: %w", err)
+	}
+
+	return buf.Bytes(), iv, nil
+}
+
+func decryptBytes(s, iv, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("Error in encryption: %w", err)
+	}
+
+	stream := cipher.NewOFB(block, iv)
+	buf := &bytes.Buffer{}
+	wtr := cipher.StreamWriter{
+		S: stream,
+		W: buf,
+	}
+
+	_, err = wtr.Write(s)
+	if err != nil {
+		return nil, fmt.Errorf("Error in encryption: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
