@@ -2,12 +2,15 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha512"
 	"fmt"
+	"io"
 	"log"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"github.com/gofrs/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -28,7 +31,13 @@ func (u *UserClaims) Valid() error {
 	return nil
 }
 
-var key = "this is a terrible key to use"
+type key struct {
+	key     []byte
+	created time.Time
+}
+
+var currentKid = ""
+var keys = map[string]key{}
 
 func main() {
 	/*
@@ -49,6 +58,11 @@ func main() {
 
 	// http.HandleFunc("/test", testFunc)
 	// http.ListenAndServe(":8080", nil)
+
+	err := generateNewKey()
+	if err != nil {
+		panic(err)
+	}
 
 	msg := "This is a message"
 	sig, err := signMessage([]byte(msg))
@@ -91,7 +105,7 @@ func comparePassword(password string, hash []byte) error {
 }
 
 func signMessage(msg []byte) ([]byte, error) {
-	h := hmac.New(sha512.New, []byte(key))
+	h := hmac.New(sha512.New, []byte(keys[currentKid].key))
 	_, err := h.Write(msg)
 	if err != nil {
 		return nil, fmt.Errorf("Error in signMessage while hashing message: %w", err)
@@ -113,7 +127,7 @@ func checkSignature(msg []byte, sig []byte) (bool, error) {
 
 func createToken(c *UserClaims) (string, error) {
 	j := jwt.NewWithClaims(jwt.SigningMethodHS512, c)
-	signedToken, err := j.SignedString([]byte(key))
+	signedToken, err := j.SignedString([]byte(keys[currentKid].key))
 	if err != nil {
 		return "", fmt.Errorf("Error in createToken when signing token %w", err)
 	}
@@ -130,7 +144,17 @@ func parseToken(signedToken string) (*UserClaims, error) {
 			return nil, fmt.Errorf("Invalid signing algorithm")
 		}
 
-		return key, nil
+		kid, ok := t.Header["kid"].(string)
+		if !ok {
+			return nil, fmt.Errorf("Invalid key ID")
+		}
+
+		k, ok := keys[kid]
+		if !ok {
+			return nil, fmt.Errorf("Invalid key ID")
+		}
+
+		return k, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Error in parseToken while parsing token %w", err)
@@ -141,4 +165,28 @@ func parseToken(signedToken string) (*UserClaims, error) {
 	}
 
 	return t.Claims.(*UserClaims), nil
+}
+
+/**
+ * builds a new key and key id then adds the key into the keys
+ */
+func generateNewKey() error {
+	newKey := make([]byte, 64)
+	_, err := io.ReadFull(rand.Reader, newKey)
+	if err != nil {
+		return fmt.Errorf("Error in generateNewKey while generating key %w", err)
+	}
+
+	kid, err := uuid.NewV4()
+	if err != nil {
+		return fmt.Errorf("Error in generateNewKey while generating key id %w", err)
+	}
+
+	keys[kid.String()] = key{
+		key:     newKey,
+		created: time.Now(),
+	}
+	currentKid = kid.String()
+
+	return nil
 }
