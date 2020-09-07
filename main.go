@@ -1,45 +1,42 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
-type person struct {
-	First string
-}
-
 func main() {
-	http.HandleFunc("/encode", encodeFunc)
-	http.HandleFunc("/decode", decodeFunc)
-	http.ListenAndServe(":8080", nil)
+	pass := "123456789"
+
+	hash, err := hashPassword(pass)
+	if err != nil {
+		panic(err)
+	}
+
+	err = comparePassword(pass, hash)
+	if err != nil {
+		log.Fatalln("Not logged in")
+	}
+
+	log.Println("Logged in")
 }
 
-func encodeFunc(w http.ResponseWriter, r *http.Request) {
-	p1 := person{
-		First: "Donna",
-	}
-
-	p2 := person{
-		First: "Bart",
-	}
-
-	people := []person{p1, p2}
-
-	err := json.NewEncoder(w).Encode(people)
+func hashPassword(password string) ([]byte, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		log.Println("Error while encoding people", err)
+		return nil, fmt.Errorf("Error while generating bcrypt hash from password: %w", err)
 	}
+
+	return hash, nil
 }
 
-func decodeFunc(w http.ResponseWriter, r *http.Request) {
-	var people []person
-	err := json.NewDecoder(r.Body).Decode(&people)
+func comparePassword(password string, hash []byte) error {
+	err := bcrypt.CompareHashAndPassword(hash, []byte(password))
 	if err != nil {
-		log.Println("Error while decoding", err)
+		return fmt.Errorf("Invalid password: %w", err)
 	}
 
-	fmt.Println("People: ", people)
+	return nil
 }
