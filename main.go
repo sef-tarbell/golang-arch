@@ -1,28 +1,55 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha512"
 	"fmt"
 	"log"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-func main() {
-	pass := "123456789"
+var key = "this is a terrible key to use"
 
-	hash, err := hashPassword(pass)
+func main() {
+	/*
+		pass := "123456789"
+
+		hash, err := hashPassword(pass)
+		if err != nil {
+			panic(err)
+		}
+
+		err = comparePassword(pass, hash)
+		if err != nil {
+			log.Fatalln("Not logged in")
+		}
+
+		log.Println("Logged in")
+	*/
+
+	// http.HandleFunc("/test", testFunc)
+	// http.ListenAndServe(":8080", nil)
+
+	msg := "This is a message"
+	sig, err := signMessage([]byte(msg))
 	if err != nil {
 		panic(err)
 	}
 
-	err = comparePassword(pass, hash)
+	match, err := checkSignature([]byte(msg), sig)
 	if err != nil {
-		log.Fatalln("Not logged in")
+		panic(err)
+	}
+	if match {
+		log.Println("Match")
 	}
 
-	log.Println("Logged in")
 }
 
+/**
+ * takes a password, returns a hash
+ */
 func hashPassword(password string) ([]byte, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -32,6 +59,9 @@ func hashPassword(password string) ([]byte, error) {
 	return hash, nil
 }
 
+/**
+ * takes a password and hash, returns error with unsuccessful compare
+ */
 func comparePassword(password string, hash []byte) error {
 	err := bcrypt.CompareHashAndPassword(hash, []byte(password))
 	if err != nil {
@@ -39,4 +69,25 @@ func comparePassword(password string, hash []byte) error {
 	}
 
 	return nil
+}
+
+func signMessage(msg []byte) ([]byte, error) {
+	h := hmac.New(sha512.New, []byte(key))
+	_, err := h.Write(msg)
+	if err != nil {
+		return nil, fmt.Errorf("Error in signMessage while hashing message: %w", err)
+	}
+
+	signature := h.Sum(nil)
+	return signature, nil
+}
+
+func checkSignature(msg []byte, sig []byte) (bool, error) {
+	newSig, err := signMessage(msg)
+	if err != nil {
+		return false, fmt.Errorf("Error in checkSignature while signing message: %w", err)
+	}
+
+	same := hmac.Equal(newSig, sig)
+	return same, nil
 }
