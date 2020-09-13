@@ -1,257 +1,86 @@
 package main
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha512"
+	"crypto/sha256"
 	"fmt"
 	"io"
-	"time"
-
-	"github.com/dgrijalva/jwt-go"
-	"github.com/gofrs/uuid"
-	"golang.org/x/crypto/bcrypt"
+	"net/http"
+	"strings"
 )
 
-type UserClaims struct {
-	jwt.StandardClaims
-	SessionID int64
-}
-
-func (u *UserClaims) Valid() error {
-	if !u.VerifyExpiresAt(time.Now().Unix(), true) {
-		return fmt.Errorf("Token has expired")
-	}
-
-	if u.SessionID == 0 {
-		return fmt.Errorf("Invalid session")
-	}
-
-	return nil
-}
-
-type key struct {
-	key     []byte
-	created time.Time
-}
-
-var currentKid = ""
-var keys = map[string]key{}
-
 func main() {
-	/*
-		pass := "123456789"
-
-		hash, err := hashPassword(pass)
-		if err != nil {
-			panic(err)
-		}
-
-		err = comparePassword(pass, hash)
-		if err != nil {
-			log.Fatalln("Not logged in")
-		}
-
-		log.Println("Logged in")
-	*/
-
-	// http.HandleFunc("/test", testFunc)
-	// http.ListenAndServe(":8080", nil)
-
-	/*
-		err := generateNewKey()
-		if err != nil {
-			panic(err)
-		}
-
-		msg := "This is a message"
-		sig, err := signMessage([]byte(msg))
-		if err != nil {
-			panic(err)
-		}
-
-		match, err := checkSignature([]byte(msg), sig)
-		if err != nil {
-			panic(err)
-		}
-		if match {
-			log.Println("Match")
-		}
-	*/
-
-	key := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	encrypted, salt, err := encryptBytes([]byte("A longer message to encrypt that might show a little more detail"), key)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println(string(encrypted))
-
-	decrypted, err := decryptBytes(encrypted, salt, key)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(string(decrypted))
+	http.HandleFunc("/", rootHandler)
+	http.HandleFunc("/submit", submitHandler)
+	http.ListenAndServe(":8080", nil)
 }
 
-/**
- * takes a password, returns a hash
- */
-func hashPassword(password string) ([]byte, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie("session")
 	if err != nil {
-		return nil, fmt.Errorf("Error while generating bcrypt hash from password: %w", err)
+		c = &http.Cookie{}
 	}
 
-	return hash, nil
+	isEqual := true
+	toks := strings.SplitN(c.Value, "|", 2)
+	if len(toks) == 2 {
+		cCode := toks[0]
+		cEmail := toks[1]
+
+		code := getCode(cEmail)
+
+		isEqual = hmac.Equal([]byte(cCode), []byte(code))
+	}
+
+	message := "Not logged in"
+	if isEqual {
+		message = "Logged in"
+	}
+
+	html := `<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>HMAC Example</title>
+	</head>
+	<body>
+		<p>Cookie: ` + c.Value + `</p>
+		<p>` + message + `</p>
+		<form action="/submit" method="POST">
+			<input type="email" name="email" />
+			<input type="submit" />
+		</form>
+	</body>
+	</html>`
+	io.WriteString(w, html)
 }
 
-/**
- * takes a password and hash, returns error with unsuccessful compare
- */
-func comparePassword(password string, hash []byte) error {
-	err := bcrypt.CompareHashAndPassword(hash, []byte(password))
-	if err != nil {
-		return fmt.Errorf("Invalid password: %w", err)
+func submitHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
 	}
 
-	return nil
+	email := r.FormValue("email")
+	if email == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	code := getCode(email)
+
+	c := http.Cookie{
+		Name:  "session",
+		Value: code + "|" + email,
+	}
+
+	http.SetCookie(w, &c)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func signMessage(msg []byte) ([]byte, error) {
-	h := hmac.New(sha512.New, []byte(keys[currentKid].key))
-	_, err := h.Write(msg)
-	if err != nil {
-		return nil, fmt.Errorf("Error in signMessage while hashing message: %w", err)
-	}
-
-	signature := h.Sum(nil)
-	return signature, nil
-}
-
-func checkSignature(msg []byte, sig []byte) (bool, error) {
-	newSig, err := signMessage(msg)
-	if err != nil {
-		return false, fmt.Errorf("Error in checkSignature while signing message: %w", err)
-	}
-
-	same := hmac.Equal(newSig, sig)
-	return same, nil
-}
-
-/**
- * creates a new token and returns it
- */
-func createToken(c *UserClaims) (string, error) {
-	j := jwt.NewWithClaims(jwt.SigningMethodHS512, c)
-	signedToken, err := j.SignedString([]byte(keys[currentKid].key))
-	if err != nil {
-		return "", fmt.Errorf("Error in createToken when signing token %w", err)
-	}
-	return signedToken, nil
-}
-
-/**)
- * takes a signed token and returns the user claims or an error
- */
-func parseToken(signedToken string) (*UserClaims, error) {
-	claims := &UserClaims{}
-	t, err := jwt.ParseWithClaims(signedToken, claims, func(t *jwt.Token) (interface{}, error) {
-		if t.Method.Alg() != jwt.SigningMethodHS512.Alg() {
-			return nil, fmt.Errorf("Invalid signing algorithm")
-		}
-
-		kid, ok := t.Header["kid"].(string)
-		if !ok {
-			return nil, fmt.Errorf("Invalid key ID")
-		}
-
-		k, ok := keys[kid]
-		if !ok {
-			return nil, fmt.Errorf("Invalid key ID")
-		}
-
-		return k, nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Error in parseToken while parsing token %w", err)
-	}
-
-	if !t.Valid {
-		return nil, fmt.Errorf("Error in parseToken, invalid token")
-	}
-
-	return t.Claims.(*UserClaims), nil
-}
-
-/**
- * builds a new key and key id then adds the key into the keys
- */
-func generateNewKey() error {
-	newKey := make([]byte, 64)
-	_, err := io.ReadFull(rand.Reader, newKey)
-	if err != nil {
-		return fmt.Errorf("Error in generateNewKey while generating key %w", err)
-	}
-
-	kid, err := uuid.NewV4()
-	if err != nil {
-		return fmt.Errorf("Error in generateNewKey while generating key id %w", err)
-	}
-
-	keys[kid.String()] = key{
-		key:     newKey,
-		created: time.Now(),
-	}
-	currentKid = kid.String()
-
-	return nil
-}
-
-func encryptBytes(s, key []byte) ([]byte, []byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("Error in encryption: %w", err)
-	}
-
-	iv := make([]byte, aes.BlockSize)
-	_, err = io.ReadFull(rand.Reader, iv)
-
-	stream := cipher.NewOFB(block, iv)
-	buf := &bytes.Buffer{}
-	wtr := cipher.StreamWriter{
-		S: stream,
-		W: buf,
-	}
-
-	_, err = wtr.Write(s)
-	if err != nil {
-		return nil, nil, fmt.Errorf("Error in encryption: %w", err)
-	}
-
-	return buf.Bytes(), iv, nil
-}
-
-func decryptBytes(s, iv, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("Error in encryption: %w", err)
-	}
-
-	stream := cipher.NewOFB(block, iv)
-	buf := &bytes.Buffer{}
-	wtr := cipher.StreamWriter{
-		S: stream,
-		W: buf,
-	}
-
-	_, err = wtr.Write(s)
-	if err != nil {
-		return nil, fmt.Errorf("Error in encryption: %w", err)
-	}
-
-	return buf.Bytes(), nil
+func getCode(msg string) string {
+	h := hmac.New(sha256.New, []byte("there are 37 ferrets in your backyard"))
+	h.Write([]byte(msg))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
