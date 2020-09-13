@@ -9,6 +9,13 @@ import (
 	"github.com/dgrijalva/jwt-go"
 )
 
+type CustomClaims struct {
+	jwt.StandardClaims
+	Email string
+}
+
+const myKey = "there are 37 ferrets in your backyard"
+
 func main() {
 	http.HandleFunc("/", rootHandler)
 	http.HandleFunc("/submit", submitHandler)
@@ -21,9 +28,18 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		c = &http.Cookie{}
 	}
 
-	isEqual := false
+	signedToken := c.Value
+	token, err := jwt.ParseWithClaims(signedToken, &CustomClaims{}, func(t *jwt.Token) (interface{}, error) {
+		return []byte(myKey), nil
+	})
+
+	claims, ok := token.Claims.(*CustomClaims)
+	if !ok {
+		// bad claims
+	}
+
 	message := "Not logged in"
-	if isEqual {
+	if ok && token.Valid && err == nil {
 		message = "Logged in"
 	}
 
@@ -35,7 +51,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		<title>HMAC Example</title>
 	</head>
 	<body>
-		<p>Cookie: ` + c.Value + `</p>
+		<p>Email: ` + claims.Email + `</p>
 		<p>` + message + `</p>
 		<form action="/submit" method="POST">
 			<input type="email" name="email" />
@@ -74,14 +90,7 @@ func submitHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getJWT(msg string) (string, error) {
-	myKey := []byte("there are 37 ferrets in your backyard")
-
-	type customClaims struct {
-		jwt.StandardClaims
-		Email string
-	}
-
-	claims := &customClaims{
+	claims := &CustomClaims{
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 		},
@@ -89,7 +98,7 @@ func getJWT(msg string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	ss, err := token.SignedString(myKey)
+	ss, err := token.SignedString([]byte(myKey))
 	if err != nil {
 		return "", fmt.Errorf("Error in getJWT, Couldn't get signed string: %w", err)
 	}
