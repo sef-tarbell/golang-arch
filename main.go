@@ -1,12 +1,12 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"time"
+
+	"github.com/dgrijalva/jwt-go"
 )
 
 func main() {
@@ -21,17 +21,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		c = &http.Cookie{}
 	}
 
-	isEqual := true
-	toks := strings.SplitN(c.Value, "|", 2)
-	if len(toks) == 2 {
-		cCode := toks[0]
-		cEmail := toks[1]
-
-		code := getCode(cEmail)
-
-		isEqual = hmac.Equal([]byte(cCode), []byte(code))
-	}
-
+	isEqual := false
 	message := "Not logged in"
 	if isEqual {
 		message = "Logged in"
@@ -68,19 +58,41 @@ func submitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code := getCode(email)
+	ss, err := getJWT(email)
+	if err != nil {
+		http.Error(w, "Failed to generate JWT", http.StatusInternalServerError)
+		return
+	}
 
 	c := http.Cookie{
 		Name:  "session",
-		Value: code + "|" + email,
+		Value: ss,
 	}
 
 	http.SetCookie(w, &c)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func getCode(msg string) string {
-	h := hmac.New(sha256.New, []byte("there are 37 ferrets in your backyard"))
-	h.Write([]byte(msg))
-	return fmt.Sprintf("%x", h.Sum(nil))
+func getJWT(msg string) (string, error) {
+	myKey := []byte("there are 37 ferrets in your backyard")
+
+	type customClaims struct {
+		jwt.StandardClaims
+		Email string
+	}
+
+	claims := &customClaims{
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
+		},
+		Email: msg,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	ss, err := token.SignedString(myKey)
+	if err != nil {
+		return "", fmt.Errorf("Error in getJWT, Couldn't get signed string: %w", err)
+	}
+
+	return ss, nil
 }
