@@ -3,14 +3,15 @@ package main
 import (
 	"crypto/hmac"
 	"crypto/sha512"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"github.com/gofrs/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -32,25 +33,27 @@ func main() {
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("session")
-	if err != nil {
-		c = &http.Cookie{}
+	sid := ""
+	message := "Not logged in"
+	errorMsg := r.FormValue("errorMsg") // fuck it
+
+	// retrieve the session id from the cookie
+	if c, err := r.Cookie("session"); err == nil {
+		// parse the cookie to get the session id
+		sid, err = parseToken(c.Value)
+		if err != nil {
+			errorMsg = url.QueryEscape("Missing or corrupted cookie")
+		}
 	}
 
-	errorMsg := r.FormValue("errorMsg")
-
-	signedToken := c.Value
-	token, err := jwt.ParseWithClaims(signedToken, &CustomClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("Invalid signing algorithm")
+	// session is in the db
+	if sid != "" {
+		userName, ok := db[sid]
+		if !ok {
+			errorMsg = url.QueryEscape("Missing session user")
+		} else {
+			message = "Logged in as " + string(userName)
 		}
-		return []byte(signingKey), nil
-	})
-
-	message := "Not logged in"
-	if err == nil && token.Valid {
-		claims := token.Claims.(*CustomClaims)
-		message = "Logged in as " + claims.UserName
 	}
 
 	html := `<!DOCTYPE html>
@@ -83,103 +86,123 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
+	// safety check, only handle POST requests
 	if r.Method != http.MethodPost {
 		errorMsg := url.QueryEscape("HTTP method was not a POST")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
+	// get the form data
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
+	// safety check username and password required
 	if username == "" || password == "" {
 		errorMsg := url.QueryEscape("Missing required data")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
+	// create a hash of the password
 	hashedPassword, err := hashPassword(password)
 	if err != nil {
 		errorMsg := "Internal Server Error"
 		http.Error(w, errorMsg, http.StatusInternalServerError)
 		return
 	}
+	password = ""
 	db[username] = hashedPassword
 
-	ss, err := getJWT(username)
+	// create a uuid for session id
+	sid, err := uuid.NewV4()
 	if err != nil {
-		http.Error(w, "Failed to generate JWT", http.StatusInternalServerError)
+		errorMsg := "Internal Server Error"
+		http.Error(w, errorMsg, http.StatusInternalServerError)
+		return
+	}
+	db[sid.String()] = []byte(username)
+
+	// create a token to store as cookie
+	t, err := createToken(sid.String())
+	if err != nil {
+		errorMsg := "Internal Server Error"
+		http.Error(w, errorMsg, http.StatusInternalServerError)
 		return
 	}
 
+	// store cookie
 	c := http.Cookie{
 		Name:  "session",
-		Value: ss,
+		Value: t,
 	}
 
+	// return with no error
 	http.SetCookie(w, &c)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
+	// safety check, only handle POST requests
 	if r.Method != http.MethodPost {
 		errorMsg := url.QueryEscape("HTTP method was not a POST")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
+	// get the form data
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
+	// safety check username and password required
 	if username == "" || password == "" {
 		errorMsg := url.QueryEscape("Missing required data")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
+	// user is in the db
 	if _, ok := db[username]; !ok {
 		errorMsg := url.QueryEscape("Username or password mismatch")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
+	// password check
 	err := bcrypt.CompareHashAndPassword(db[username], []byte(password))
 	if err != nil {
 		errorMsg := url.QueryEscape("Username or password mismatch")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
+	password = ""
 
-	ss, err := getJWT(username)
+	// create a uuid for session id
+	sid, err := uuid.NewV4()
 	if err != nil {
-		http.Error(w, "Failed to generate JWT", http.StatusInternalServerError)
+		errorMsg := "Internal Server Error"
+		http.Error(w, errorMsg, http.StatusInternalServerError)
+		return
+	}
+	db[sid.String()] = []byte(username)
+
+	// create a token to store as cookie
+	t, err := createToken(sid.String())
+	if err != nil {
+		errorMsg := "Internal Server Error"
+		http.Error(w, errorMsg, http.StatusInternalServerError)
 		return
 	}
 
+	// store cookie
 	c := http.Cookie{
 		Name:  "session",
-		Value: ss,
+		Value: t,
 	}
 
+	// return with no error
 	http.SetCookie(w, &c)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func getJWT(username string) (string, error) {
-	claims := &CustomClaims{
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
-		},
-		UserName: username,
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	ss, err := token.SignedString([]byte(signingKey))
-	if err != nil {
-		return "", fmt.Errorf("Error in getJWT, Couldn't get signed string: %w", err)
-	}
-
-	return ss, nil
 }
 
 func hashPassword(password string) ([]byte, error) {
@@ -206,7 +229,7 @@ func createToken(sid string) (string, error) {
 	ss := base64.StdEncoding.EncodeToString(h.Sum(nil))
 	//return string(ss), nil
 	// not sure why we are doing this...
-	return ss + "|" + sid
+	return ss + "|" + sid, nil
 }
 
 /**
@@ -216,19 +239,21 @@ func createToken(sid string) (string, error) {
  * return session id
  */
 func parseToken(ss string) (string, error) {
-	toks := strings.Split(ss, ".")
+	toks := strings.Split(ss, "|")
 	if len(toks) != 2 {
 		return "", fmt.Errorf("Error in parseToken: malformed token")
 	}
 
-	sig := toks[0]
-	sid := toks[1]
+	sig, err := base64.StdEncoding.DecodeString(toks[0])
+	if err != nil {
+		return "", fmt.Errorf("Error in parseToken: %w", err)
+	}
 
-	if !validMAC([]byte(sid), []byte(sig), []byte(hmacKey)) {
+	if !validMAC([]byte(toks[1]), []byte(sig), []byte(hmacKey)) {
 		return "", fmt.Errorf("Error in parseToken: mismatched token")
 	}
 
-	return sid, nil
+	return string(toks[1]), nil
 }
 
 /**
