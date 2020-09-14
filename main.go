@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gofrs/uuid"
@@ -19,7 +20,15 @@ type CustomClaims struct {
 	UserName string
 }
 
-var db = map[string][]byte{}
+type UserData struct {
+	UserName     string
+	FirstName    string
+	Registration string
+	LastLogin    string
+	Password     []byte
+}
+
+var db = map[string]UserData{}
 var sessions = map[string]string{}
 
 var hmacKey = "supercalifragistic expialidotious 2221 aardvarks"
@@ -45,13 +54,14 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// session is in the db
+	// session is in the sessions store
 	if sid != "" {
 		userName, ok := sessions[sid]
 		if !ok {
 			errorMsg = url.QueryEscape("Missing session user")
 		} else {
-			message = "Logged in as " + string(userName)
+			u := db[userName]
+			message = "Logged in as <b>" + u.FirstName + "</b> (" + string(userName) + ") registered: " + u.Registration
 		}
 	}
 
@@ -69,16 +79,22 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 			<hr>
 			<h3>Register</h3>
 			<form action="/register" method="POST">
-				Username: <input type="text" name="username" /><br />
-				Password: <input type="password" name="password" /><br />
-				<input type="submit" name="Register" />
+				<label for="firstname">First Name:</label>
+					<input type="text" name="firstname" placeholder="First Name" id="firstname" /><br />
+				<label for="username">User Name:</label>
+					<input type="text" name="username" placeholder="User Name" id="username" /><br />
+				<label for="password">Password:</label>
+					<input type="password" name="password" id="password" /><br />
+				<button type="submit">Register</button>
 			</form>
 			<hr>
 			<h3>Login</h3>
 			<form action="/login" method="POST">
-				Username: <input type="text" name="username" /><br />
-				Password: <input type="password" name="password" /><br />
-				<input type="submit" name="Login" />
+				<label for="username">User Name:</label>
+					<input type="text" name="username" placeholder="User Name" id="username" /><br />
+				<label for="password">Password:</label>
+					<input type="password" name="password" id="password" /><br />
+				<button type="submit">Login</button>
 			</form>
 		</body>
 		</html>`)
@@ -94,6 +110,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// get the form data
 	userName := r.FormValue("username")
+	firstName := r.FormValue("firstname")
 	password := r.FormValue("password")
 
 	// safety check username and password required
@@ -111,7 +128,15 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	password = ""
-	db[userName] = hashedPassword
+
+	u := UserData{
+		UserName:     userName,
+		FirstName:    firstName,
+		Registration: time.Now().Format(time.RFC3339),
+		LastLogin:    time.Now().Format(time.RFC3339),
+		Password:     hashedPassword,
+	}
+	db[userName] = u
 
 	// create a uuid for session id
 	sid, err := uuid.NewV4()
@@ -161,14 +186,15 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// user is in the db
-	if _, ok := db[userName]; !ok {
+	u, ok := db[userName]
+	if !ok {
 		errorMsg := url.QueryEscape("Username or password mismatch")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
 	// password check
-	err := bcrypt.CompareHashAndPassword(db[userName], []byte(password))
+	err := bcrypt.CompareHashAndPassword(u.Password, []byte(password))
 	if err != nil {
 		errorMsg := url.QueryEscape("Username or password mismatch")
 		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
@@ -184,6 +210,9 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessions[sid.String()] = userName
+
+	u.LastLogin = time.Now().Format(time.RFC3339)
+	db[userName] = u
 
 	// create a token to store as cookie
 	t, err := createToken(sid.String())
