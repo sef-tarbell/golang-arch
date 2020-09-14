@@ -3,11 +3,9 @@ package main
 import (
 	"crypto/hmac"
 	"crypto/sha512"
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -16,8 +14,8 @@ import (
 )
 
 type CustomClaims struct {
+	SessionID string
 	jwt.StandardClaims
-	UserName string
 }
 
 type UserData struct {
@@ -31,7 +29,9 @@ type UserData struct {
 var db = map[string]UserData{}
 var sessions = map[string]string{}
 
-var hmacKey = "supercalifragistic expialidotious 2221 aardvarks"
+const (
+	SIGNINGKEY = "fourhundredtonsofuranium235mixedwithcookiedough"
+)
 
 func main() {
 	http.HandleFunc("/", rootHandler)
@@ -121,7 +121,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// create a hash of the password
-	hashedPassword, err := hashPassword(password)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		errorMsg := "Internal Server Error"
 		http.Error(w, errorMsg, http.StatusInternalServerError)
@@ -134,7 +134,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		FirstName:    firstName,
 		Registration: time.Now().Format(time.RFC3339),
 		LastLogin:    time.Now().Format(time.RFC3339),
-		Password:     hashedPassword,
+		Password:     hash,
 	}
 	db[userName] = u
 
@@ -233,55 +233,58 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func hashPassword(password string) ([]byte, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, fmt.Errorf("Error in hashPassword: %w", err)
-	}
-
-	return hash, nil
-}
-
 /**
  * takes a session id (string?)
- * uses HMAC to create a signature for the session id
- * return signed string: signature + session id
+ * creates a jwt with session id and expiration set to 15 min
+ * return jwt
  */
 func createToken(sid string) (string, error) {
-	h := hmac.New(sha512.New, []byte(hmacKey))
-	_, err := h.Write([]byte(sid))
+	c := &CustomClaims{
+		SessionID: sid,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
+		},
+	}
+
+	t := jwt.NewWithClaims(jwt.SigningMethodHS512, c)
+	ss, err := t.SignedString([]byte(SIGNINGKEY))
 	if err != nil {
 		return "", fmt.Errorf("Error in createToken: %w", err)
 	}
 
-	ss := base64.StdEncoding.EncodeToString(h.Sum(nil))
-	//return string(ss), nil
-	// not sure why we are doing this...
-	return ss + "|" + sid, nil
+	return ss, nil
 }
 
 /**
- * takes a signed string
- * separate the signature from the session id
- * verify that signature matches session id
+ * takes jwt
+ * verify jwt is valid
  * return session id
  */
-func parseToken(ss string) (string, error) {
-	toks := strings.Split(ss, "|")
-	if len(toks) != 2 {
-		return "", fmt.Errorf("Error in parseToken: malformed token")
-	}
-
-	sig, err := base64.StdEncoding.DecodeString(toks[0])
+func parseToken(j string) (string, error) {
+	t, err := jwt.ParseWithClaims(j, &CustomClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS512.Alg() {
+			return nil, fmt.Errorf("Error in parseToken: Unexpected signing method")
+		}
+		return []byte(SIGNINGKEY), nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("Error in parseToken: %w", err)
+		return "", fmt.Errorf("Error in parseToken: Unable to parse token")
 	}
 
-	if !validMAC([]byte(toks[1]), []byte(sig), []byte(hmacKey)) {
-		return "", fmt.Errorf("Error in parseToken: mismatched token")
+	if !t.Valid {
+		return "", fmt.Errorf("Error in parseToken: Invalid token")
 	}
 
-	return string(toks[1]), nil
+	claims, ok := t.Claims.(*CustomClaims)
+	if !ok {
+		return "", fmt.Errorf("Error in parseToken: Unable to parse claims")
+	}
+
+	if claims.ExpiresAt < time.Now().Unix() {
+		return "", fmt.Errorf("Error in parseToken: Expired token")
+	}
+
+	return claims.SessionID, nil
 }
 
 /**
