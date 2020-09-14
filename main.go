@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha512"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -26,31 +24,33 @@ type UserData struct {
 	Password     []byte
 }
 
+// key is username, value is userdata
 var db = map[string]UserData{}
-var sessions = map[string]string{}
 
-const (
-	SIGNINGKEY = "fourhundredtonsofuranium235mixedwithcookiedough"
-)
+// key is sessionid, value is token
+var sessions = map[string]string{}
+var signingKey = []byte("fourhundredtonsofuranium235mixedwithcookiedough")
 
 func main() {
 	http.HandleFunc("/", rootHandler)
 	http.HandleFunc("/register", registerHandler)
 	http.HandleFunc("/login", loginHandler)
+	http.HandleFunc("/logout", logoutHandler)
 	http.ListenAndServe(":8080", nil)
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	sid := ""
-	message := "Not logged in"
-	errorMsg := r.FormValue("errorMsg") // fuck it
+	loginMsg := "Not logged in"
+	relayMsg := r.FormValue("msg")
+	errorMsg := ""
 
 	// retrieve the session id from the cookie
 	if c, err := r.Cookie("session"); err == nil {
 		// parse the cookie to get the session id
 		sid, err = parseToken(c.Value)
 		if err != nil {
-			errorMsg = url.QueryEscape("Missing or corrupted cookie")
+			errorMsg += "Missing or corrupted cookie"
 		}
 	}
 
@@ -58,10 +58,10 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	if sid != "" {
 		userName, ok := sessions[sid]
 		if !ok {
-			errorMsg = url.QueryEscape("Missing session user")
+			errorMsg += "Missing session user"
 		} else {
 			u := db[userName]
-			message = "Logged in as <b>" + u.FirstName + "</b> (" + string(userName) + ") registered: " + u.Registration
+			loginMsg = "Logged in as <b>" + u.FirstName + "</b> (" + string(userName) + ") registered: " + u.Registration
 		}
 	}
 
@@ -74,7 +74,8 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 			<title>HMAC Example</title>
 		</head>
 		<body>
-			<p>`+message+`</p>
+			<p>`+loginMsg+`</p>
+			<p>`+relayMsg+`</p>
 			<p>`+errorMsg+`</p>
 			<hr>
 			<h3>Register</h3>
@@ -96,6 +97,11 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 					<input type="password" name="password" id="password" /><br />
 				<button type="submit">Login</button>
 			</form>
+			<hr>
+			<h3>Logout</h3>
+			<form action="/logout" method="POST">
+				<button type="submit">Logout</button>
+			</form>
 		</body>
 		</html>`)
 }
@@ -104,7 +110,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	// safety check, only handle POST requests
 	if r.Method != http.MethodPost {
 		errorMsg := url.QueryEscape("HTTP method was not a POST")
-		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
@@ -116,7 +122,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	// safety check username and password required
 	if userName == "" || password == "" {
 		errorMsg := url.QueryEscape("Missing required data")
-		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
@@ -159,6 +165,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	c := http.Cookie{
 		Name:  "session",
 		Value: t,
+		Path:  "/",
 	}
 
 	// return with no error
@@ -170,7 +177,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	// safety check, only handle POST requests
 	if r.Method != http.MethodPost {
 		errorMsg := url.QueryEscape("HTTP method was not a POST")
-		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
@@ -181,7 +188,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	// safety check username and password required
 	if userName == "" || password == "" {
 		errorMsg := url.QueryEscape("Missing required data")
-		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
@@ -189,7 +196,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	u, ok := db[userName]
 	if !ok {
 		errorMsg := url.QueryEscape("Username or password mismatch")
-		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
@@ -197,7 +204,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	err := bcrypt.CompareHashAndPassword(u.Password, []byte(password))
 	if err != nil {
 		errorMsg := url.QueryEscape("Username or password mismatch")
-		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 	password = ""
@@ -226,11 +233,43 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	c := http.Cookie{
 		Name:  "session",
 		Value: t,
+		Path:  "/",
 	}
 
 	// return with no error
 	http.SetCookie(w, &c)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	sid := ""
+	message := "Logged out"
+
+	// retrieve the session id from the cookie
+	if c, err := r.Cookie("session"); err == nil {
+		// parse the cookie to get the session id
+		sid, err = parseToken(c.Value)
+		if err != nil {
+			// log out an error?
+			message = "Failed to parse cookie"
+		}
+
+		if sid != "" {
+			// delete the session
+			delete(sessions, sid)
+		}
+
+		newCookie := http.Cookie{
+			Name:    "session",
+			Value:   "",
+			Path:    "/",
+			Expires: time.Unix(0, 0),
+		}
+
+		http.SetCookie(w, &newCookie)
+	}
+
+	http.Redirect(w, r, "/?msg="+message, http.StatusSeeOther)
 }
 
 /**
@@ -247,7 +286,7 @@ func createToken(sid string) (string, error) {
 	}
 
 	t := jwt.NewWithClaims(jwt.SigningMethodHS512, c)
-	ss, err := t.SignedString([]byte(SIGNINGKEY))
+	ss, err := t.SignedString(signingKey)
 	if err != nil {
 		return "", fmt.Errorf("Error in createToken: %w", err)
 	}
@@ -265,7 +304,7 @@ func parseToken(j string) (string, error) {
 		if t.Method.Alg() != jwt.SigningMethodHS512.Alg() {
 			return nil, fmt.Errorf("Error in parseToken: Unexpected signing method")
 		}
-		return []byte(SIGNINGKEY), nil
+		return signingKey, nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("Error in parseToken: Unable to parse token")
@@ -285,14 +324,4 @@ func parseToken(j string) (string, error) {
 	}
 
 	return claims.SessionID, nil
-}
-
-/**
- * helper func to compare mac
- */
-func validMAC(msg, msgMAC, k []byte) bool {
-	mac := hmac.New(sha512.New, k)
-	mac.Write(msg)
-	expectedMAC := mac.Sum(nil)
-	return hmac.Equal(msgMAC, expectedMAC)
 }
