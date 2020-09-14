@@ -4,21 +4,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type CustomClaims struct {
 	jwt.StandardClaims
-	Email string
+	UserName string
+	Password string
 }
 
-const myKey = "there are 37 ferrets in your backyard"
+const signingKey = "there are 37 ferrets in your backyard"
+
+var db = map[string][]byte{}
 
 func main() {
 	http.HandleFunc("/", rootHandler)
-	http.HandleFunc("/submit", submitHandler)
+	http.HandleFunc("/register", registerHandler)
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -28,19 +33,20 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		c = &http.Cookie{}
 	}
 
+	errorMsg := r.FormValue("errorMsg")
+
 	signedToken := c.Value
 	token, err := jwt.ParseWithClaims(signedToken, &CustomClaims{}, func(t *jwt.Token) (interface{}, error) {
 		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, fmt.Errorf("Invalid signing algorithm")
 		}
-		return []byte(myKey), nil
+		return []byte(signingKey), nil
 	})
 
 	message := "Not logged in"
-	claims := &CustomClaims{}
 	if err == nil && token.Valid {
-		message = "Logged in"
-		claims = token.Claims.(*CustomClaims)
+		claims := token.Claims.(*CustomClaims)
+		message = "Logged in as " + claims.UserName
 	}
 
 	html := `<!DOCTYPE html>
@@ -51,31 +57,43 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		<title>HMAC Example</title>
 	</head>
 	<body>
-		<p>Email: ` + claims.Email + `</p>
-		<p>Cookie: ` + signedToken + `</p>
 		<p>` + message + `</p>
-		<form action="/submit" method="POST">
-			<input type="email" name="email" />
-			<input type="submit" />
+		<p>` + errorMsg + `</p>
+		<form action="/register" method="POST">
+			Username: <input type="text" name="username" /><br />
+			Password: <input type="password" name="password" /><br />
+			<input type="submit" name="Login" />
 		</form>
 	</body>
 	</html>`
 	io.WriteString(w, html)
 }
 
-func submitHandler(w http.ResponseWriter, r *http.Request) {
+func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		errorMsg := url.QueryEscape("HTTP method was not a POST")
+		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
-	email := r.FormValue("email")
-	if email == "" {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	if username == "" || password == "" {
+		errorMsg := url.QueryEscape("Missing required data")
+		http.Redirect(w, r, "/?errorMsg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
-	ss, err := getJWT(email)
+	hashedPassword, err := hashPassword(password)
+	if err != nil {
+		errorMsg := "Internal Server Error"
+		http.Error(w, errorMsg, http.StatusInternalServerError)
+		return
+	}
+	db[username] = hashedPassword
+
+	ss, err := getJWT(username, hashedPassword)
 	if err != nil {
 		http.Error(w, "Failed to generate JWT", http.StatusInternalServerError)
 		return
@@ -90,19 +108,29 @@ func submitHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func getJWT(msg string) (string, error) {
+func getJWT(username string, hashedPassword []byte) (string, error) {
 	claims := &CustomClaims{
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 		},
-		Email: msg,
+		UserName: username,
+		Password: string(hashedPassword),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	ss, err := token.SignedString([]byte(myKey))
+	ss, err := token.SignedString([]byte(signingKey))
 	if err != nil {
 		return "", fmt.Errorf("Error in getJWT, Couldn't get signed string: %w", err)
 	}
 
 	return ss, nil
+}
+
+func hashPassword(password string) ([]byte, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("Error in hashPassword: %w", err)
+	}
+
+	return hash, nil
 }
