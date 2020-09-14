@@ -30,17 +30,17 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 	signedToken := c.Value
 	token, err := jwt.ParseWithClaims(signedToken, &CustomClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, fmt.Errorf("Invalid signing algorithm")
+		}
 		return []byte(myKey), nil
 	})
 
-	claims, ok := token.Claims.(*CustomClaims)
-	if !ok {
-		// bad claims
-	}
-
 	message := "Not logged in"
-	if ok && token.Valid && err == nil {
+	claims := &CustomClaims{}
+	if err == nil && token.Valid {
 		message = "Logged in"
+		claims = token.Claims.(*CustomClaims)
 	}
 
 	html := `<!DOCTYPE html>
@@ -52,6 +52,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	</head>
 	<body>
 		<p>Email: ` + claims.Email + `</p>
+		<p>Cookie: ` + signedToken + `</p>
 		<p>` + message + `</p>
 		<form action="/submit" method="POST">
 			<input type="email" name="email" />
