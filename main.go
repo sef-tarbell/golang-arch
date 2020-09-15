@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"net/url"
@@ -27,6 +28,14 @@ type UserData struct {
 	Registration string
 	LastLogin    string
 	Password     []byte
+}
+
+type IndexPageData struct {
+	PageTitle string
+	LoggedIn  bool
+	FirstName string
+	UserName  string
+	Message   string
 }
 
 // key is username, value is userdata
@@ -62,6 +71,7 @@ func main() {
 	http.HandleFunc("/logout", logout)
 	http.HandleFunc("/oauth/amazon/login", oauthAmazonLogin)
 	http.HandleFunc("/oauth/amazon/receive", oauthAmazonReceive)
+	http.HandleFunc("/partial-register", partialRegister)
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -81,60 +91,27 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var userName string
+	var firstName string
+	loggedIn := false
 	if sid != "" {
 		userName = sessions[sid]
-	}
-
-	var firstName string
-	if userData, ok := db[userName]; ok {
-		firstName = userData.FirstName
+		if userData, ok := db[userName]; ok {
+			firstName = userData.FirstName
+		}
+		loggedIn = true
 	}
 
 	msg := r.FormValue("msg")
 
-	fmt.Fprintf(w,
-		`<!DOCTYPE html>
-		<html lang="en">
-		<head>
-			<meta charset="UTF-8">
-			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-			<title>OAuth Example</title>
-		</head>
-		<body>
-			<p>Logged in as <b>%s</b> (%s)</p>
-			<p>Message: %s</p>
-			<hr>
-			<h3>Register</h3>
-			<form action="/register" method="POST">
-				<label for="firstname">First Name:</label>
-					<input type="text" name="firstname" placeholder="First Name" id="firstname" /><br />
-				<label for="username">User Name:</label>
-					<input type="text" name="username" placeholder="User Name" id="username" /><br />
-				<label for="password">Password:</label>
-					<input type="password" name="password" id="password" /><br />
-				<button type="submit">Register</button>
-			</form>
-			<hr>
-			<h3>Login</h3>
-			<form action="/login" method="POST">
-				<label for="username">User Name:</label>
-					<input type="text" name="username" placeholder="User Name" id="username" /><br />
-				<label for="password">Password:</label>
-					<input type="password" name="password" id="password" /><br />
-				<button type="submit">Login</button>
-			</form>
-			<hr>
-			<h3>Login With Amazon</h3>
-			<form action="/oauth/amazon/login" method="POST">
-				<button type="submit">Login With Amazon</button>
-			</form>
-			<hr>
-			<h3>Logout</h3>
-			<form action="/logout" method="POST">
-				<button type="submit">Logout</button>
-			</form>
-		</body>
-		</html>`, firstName, userName, msg)
+	tmpl := template.Must(template.ParseFiles("index.html"))
+	data := IndexPageData{
+		PageTitle: "Welcome",
+		LoggedIn:  loggedIn,
+		FirstName: firstName,
+		UserName:  userName,
+		Message:   msg,
+	}
+	tmpl.Execute(w, data)
 }
 
 func register(w http.ResponseWriter, r *http.Request) {
@@ -365,4 +342,8 @@ func createSession(userName string, w http.ResponseWriter) error {
 
 	http.SetCookie(w, &c)
 	return nil
+}
+
+func partialRegister(w http.ResponseWriter, r *http.Request) {
+	//tmpl := template.Must(template.ParseFiles("partial-register.html"))
 }

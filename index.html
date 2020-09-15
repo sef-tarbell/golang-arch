@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.PageTitle}}</title>
+</head>
+<body>
+  {{if .LoggedIn}}
+    <p>Logged in as <b>{{.FirstName}}</b> ({{.UserName}})</p>
+  {{else}}
+    <p>Not logged in</p>
+  {{end}}
+  <p>Message: {{.Message}}</p>
+  <hr>
+  <h3>Register</h3>
+  <form action="/register" method="POST">
+    <label for="firstname">First Name:</label>
+      <input type="text" name="firstname" placeholder="First Name" id="firstname" /><br />
+    <label for="username">User Name:</label>
+      <input type="text" name="username" placeholder="User Name" id="username" /><br />
+    <label for="password">Password:</label>
+      <input type="password" name="password" id="password" /><br />
+    <button type="submit">Register</button>
+  </form>
+  <hr>
+  <h3>Login</h3>
+  <form action="/login" method="POST">
+    <label for="username">User Name:</label>
+      <input type="text" name="username" placeholder="User Name" id="username" /><br />
+    <label for="password">Password:</label>
+      <input type="password" name="password" id="password" /><br />
+    <button type="submit">Login</button>
+  </form>
+  <hr>
+  <h3>Login With Amazon</h3>
+  <form action="/oauth/amazon/login" method="POST">
+    <button type="submit">Login With Amazon</button>
+  </form>
+  <hr>
+  <h3>Logout</h3>
+  <form action="/logout" method="POST">
+    <button type="submit">Logout</button>
+  </form>
+</body>
+</html>
