@@ -3,11 +3,16 @@ package main
 import (
 	"fmt"
 	"net/http"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/github"
 )
 
-// github
-// Client ID e21fc64e6333e75e190c
-// Client Secret 8d6a0ce82f6d081e6c998d1bb9fc5556592a30e4
+var githubOauthConfig = &oauth2.Config{
+	ClientID:     "e21fc64e6333e75e190c",
+	ClientSecret: "8d6a0ce82f6d081e6c998d1bb9fc5556592a30e4",
+	Endpoint:     github.Endpoint,
+}
 
 func main() {
 	http.HandleFunc("/", rootHandler)
@@ -32,4 +37,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func oauthGithubHandler(w http.ResponseWriter, r *http.Request) {
+	// should be passing some sort of state - session or something
+	redirectURL := githubOauthConfig.AuthCodeURL("0000")
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
