@@ -1,9 +1,8 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"net/http"
 	"strings"
 
@@ -11,11 +10,23 @@ import (
 	"golang.org/x/oauth2/github"
 )
 
+// {"data":{"viewer":{"id":"<returned-from-github>"}}}
+type githubOAuthResponse struct {
+	Data struct {
+		Viewer struct {
+			ID string `json:"id"`
+		} `json:"viewer"`
+	} `json:"data"`
+}
+
 var githubOauthConfig = &oauth2.Config{
 	ClientID:     "e21fc64e6333e75e190c",
 	ClientSecret: "8d6a0ce82f6d081e6c998d1bb9fc5556592a30e4",
 	Endpoint:     github.Endpoint,
 }
+
+// key is github ID, value is user ID
+var githubConnections map[string]string
 
 func main() {
 	http.HandleFunc("/", rootHandler)
@@ -66,18 +77,25 @@ func oauthReceiveHandler(w http.ResponseWriter, r *http.Request) {
 	client := oauth2.NewClient(r.Context(), ts)
 
 	requestBody := strings.NewReader(`{"query": "query {viewer {id}}"}`)
-	response, err := client.Post("https://api.github.com/graphql", "application/json", requestBody)
+	resp, err := client.Post("https://api.github.com/graphql", "application/json", requestBody)
 	if err != nil {
 		http.Error(w, "Failed to retrieve user id", http.StatusBadRequest)
 		return
 	}
-	defer response.Body.Close()
+	defer resp.Body.Close()
 
-	bs, err := ioutil.ReadAll(response.Body)
+	var gr githubOAuthResponse
+	err = json.NewDecoder(resp.Body).Decode(&gr)
 	if err != nil {
-		http.Error(w, "Failed to read github user information", http.StatusInternalServerError)
+		http.Error(w, "Github invalid response", http.StatusInternalServerError)
 		return
 	}
 
-	log.Println(string(bs))
+	githubID := gr.Data.Viewer.ID
+	userID, ok := githubConnections[githubID]
+	if !ok {
+		// create user account
+	}
+
+	// login to account using JWT
 }
