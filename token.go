@@ -1,52 +1,59 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 )
 
-type customClaims struct {
+type ourClaims struct {
+	SessionID string
 	jwt.StandardClaims
-	SID string
 }
 
-var key = []byte("twotonsofuranium235!mixedwithcookiedoughandchocolatechips^")
+var signingKey = []byte("twotonsofuranium235!mixedwithcookiedoughandchocolatechips^")
 
 func createToken(sid string) (string, error) {
-
-	cc := customClaims{
+	c := &ourClaims{
+		SessionID: sid,
 		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+			ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 		},
-		SID: sid,
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, cc)
-	st, err := token.SignedString(key)
+	t := jwt.NewWithClaims(jwt.SigningMethodHS512, c)
+	ss, err := t.SignedString(signingKey)
 	if err != nil {
-		return "", fmt.Errorf("couldn't sign token in createToken %w", err)
+		return "", fmt.Errorf("Error in createToken: %w", err)
 	}
-	return st, nil
+
+	return ss, nil
 }
 
-func parseToken(st string) (string, error) {
-	token, err := jwt.ParseWithClaims(st, &customClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, errors.New("parseWithClaims different algorithms used")
+func parseToken(j string) (string, error) {
+	t, err := jwt.ParseWithClaims(j, &ourClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS512.Alg() {
+			return nil, fmt.Errorf("Error in parseToken: Unexpected signing method")
 		}
-		return key, nil
+		return signingKey, nil
 	})
-
 	if err != nil {
-		return "", fmt.Errorf("couldn't ParseWithClaims in parseToken %w", err)
+		return "", fmt.Errorf("Error in parseToken: Unable to parse token")
 	}
 
-	if !token.Valid {
-		return "", fmt.Errorf("token not valid in parseToken")
+	if !t.Valid {
+		return "", fmt.Errorf("Error in parseToken: Invalid token")
 	}
 
-	return token.Claims.(*customClaims).SID, nil
+	claims, ok := t.Claims.(*ourClaims)
+	if !ok {
+		return "", fmt.Errorf("Error in parseToken: Unable to parse claims")
+	}
+
+	if claims.ExpiresAt < time.Now().Unix() {
+		return "", fmt.Errorf("Error in parseToken: Expired token")
+	}
+
+	return claims.SessionID, nil
 }

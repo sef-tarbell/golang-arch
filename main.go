@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,16 +14,12 @@ import (
 	"golang.org/x/oauth2/amazon"
 )
 
-// {"data":{"viewer":{"id":"<returned-from-amazon>"}}}
-/*
-type amazonOAuthResponse struct {
-	Data struct {
-		Viewer struct {
-			ID string `json:"id"`
-		} `json:"viewer"`
-	} `json:"data"`
+// {"user_id":"amzn1.account.AGPCHSCJL6ZCTBHQTEU4CG67MHJQ","name":"Sef Tarbell","email":"sef.tarbell@gmail.com"}
+type amazonProfileResponse struct {
+	UserID string `json:"user_id"`
+	Name   string `json:"name"`
+	Email  string `json:"email"`
 }
-*/
 
 type UserData struct {
 	UserName     string
@@ -33,13 +30,22 @@ type UserData struct {
 }
 
 // key is username, value is userdata
-var db = map[string]UserData{}
+// initializing with test user
+var db = map[string]UserData{
+	"test@test.com": UserData{
+		UserName:  "test@test.com",
+		FirstName: "Test",
+	},
+}
 
 // key is sessionid, value is token
 var sessions = map[string]string{}
 
 // key is uuid from oauth login, value is expiration time
 var oauthExp = map[string]time.Time{}
+
+// key is amazon ID, value is user ID
+var oauthConnections map[string]string
 
 var amazonOAuthConfig = &oauth2.Config{
 	ClientID:     "amzn1.application-oa2-client.441cca64a275479194c4ae19bf32b33b",
@@ -48,9 +54,6 @@ var amazonOAuthConfig = &oauth2.Config{
 	RedirectURL:  "http://localhost:8080/oauth/amazon/receive",
 	Scopes:       []string{"profile"},
 }
-
-// key is amazon ID, value is user ID
-var amazonConnections map[string]string
 
 func main() {
 	http.HandleFunc("/", rootHandler)
@@ -67,6 +70,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		c = &http.Cookie{
 			Name:  "session",
+			Path:  "/",
 			Value: "",
 		}
 	}
@@ -171,27 +175,14 @@ func register(w http.ResponseWriter, r *http.Request) {
 	}
 	db[userName] = u
 
-	// create a uuid for session id
-	sid := uuid.New().String()
-	sessions[sid] = userName
-
-	// create a token to store as cookie
-	t, err := createToken(sid)
+	err = createSession(userName, w)
 	if err != nil {
-		errorMsg := "Internal Server Error"
-		http.Error(w, errorMsg, http.StatusInternalServerError)
+		log.Println("Error in register failed to create session", err)
+		errorMsg := url.QueryEscape("Failed to create session")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
-	// store cookie
-	c := http.Cookie{
-		Name:  "session",
-		Value: t,
-		Path:  "/",
-	}
-
-	// return with no error
-	http.SetCookie(w, &c)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -231,62 +222,43 @@ func login(w http.ResponseWriter, r *http.Request) {
 	}
 	password = ""
 
-	// create a uuid for session id
-	sid := uuid.New().String()
-	sessions[sid] = userName
-
-	u.LastLogin = time.Now().Format(time.RFC3339)
-	db[userName] = u
-
-	// create a token to store as cookie
-	t, err := createToken(sid)
+	err = createSession(userName, w)
 	if err != nil {
-		errorMsg := "Internal Server Error"
-		http.Error(w, errorMsg, http.StatusInternalServerError)
+		log.Println("Error in login failed to create session", err)
+		errorMsg := url.QueryEscape("Failed to create session")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
 		return
 	}
 
-	// store cookie
-	c := http.Cookie{
-		Name:  "session",
-		Value: t,
-		Path:  "/",
-	}
-
-	// return with no error
-	http.SetCookie(w, &c)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func logout(w http.ResponseWriter, r *http.Request) {
-	sid := ""
-	message := "Logged out"
-
-	// retrieve the session id from the cookie
-	if c, err := r.Cookie("session"); err == nil {
-		// parse the cookie to get the session id
-		sid, err = parseToken(c.Value)
-		if err != nil {
-			// log out an error?
-			message = "Failed to parse cookie"
-		}
-
-		if sid != "" {
-			// delete the session
-			delete(sessions, sid)
-		}
-
-		newCookie := http.Cookie{
-			Name:    "session",
-			Value:   "",
-			Path:    "/",
-			Expires: time.Unix(0, 0),
-		}
-
-		http.SetCookie(w, &newCookie)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
 	}
 
-	http.Redirect(w, r, "/?msg="+message, http.StatusSeeOther)
+	c, err := r.Cookie("session")
+	if err != nil {
+		c = &http.Cookie{
+			Name:  "session",
+			Path:  "/",
+			Value: "",
+		}
+	}
+
+	sID, err := parseToken(c.Value)
+	if err != nil {
+		log.Println("index parseToken", err)
+	}
+
+	delete(sessions, sID)
+
+	c.MaxAge = -1
+
+	http.SetCookie(w, c)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func oauthAmazonLogin(w http.ResponseWriter, r *http.Request) {
@@ -306,4 +278,91 @@ func oauthAmazonLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func oauthAmazonReceive(w http.ResponseWriter, r *http.Request) {
+	code := r.FormValue("code")
+	id := r.FormValue("state")
+
+	// check session expired
+	exp, ok := oauthExp[id]
+	if !ok {
+		errorMsg := url.QueryEscape("Invalid Session")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	if time.Now().After(exp) {
+		errorMsg := url.QueryEscape("Expired Session")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	// exchange to get a token
+	token, err := amazonOAuthConfig.Exchange(r.Context(), code)
+	if err != nil {
+		errorMsg := url.QueryEscape("Failed Token Exchange")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	// get token source and client
+	ts := amazonOAuthConfig.TokenSource(r.Context(), token)
+	client := oauth2.NewClient(r.Context(), ts)
+
+	// query for profile info
+	resp, err := client.Get("https://api.amazon.com/user/profile")
+	if err != nil {
+		errorMsg := url.QueryEscape("Amazon Access Failed")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		errorMsg := url.QueryEscape("Amazon Access Failed")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	var p amazonProfileResponse
+	err = json.NewDecoder(resp.Body).Decode(&p)
+	if err != nil {
+		errorMsg := url.QueryEscape("Amazon Access Failed")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	amazonID := p.UserID
+	userName, ok := oauthConnections[amazonID]
+	if !ok {
+		// use test user account
+		userName = "test@test.com"
+	}
+
+	err = createSession(userName, w)
+	if err != nil {
+		log.Println("Error in oauthAmazonReceive failed to create session", err)
+		errorMsg := url.QueryEscape("Failed to create session")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	msg := url.QueryEscape("You logged in " + userName)
+	http.Redirect(w, r, "/?msg="+msg, http.StatusSeeOther)
+}
+
+func createSession(userName string, w http.ResponseWriter) error {
+	sid := uuid.New().String()
+	sessions[sid] = userName
+	token, err := createToken(sid)
+	if err != nil {
+		return fmt.Errorf("Error in createSession, failed to create token: %w", err)
+	}
+
+	c := http.Cookie{
+		Name:  "session",
+		Path:  "/",
+		Value: token,
+	}
+
+	http.SetCookie(w, &c)
+	return nil
 }
