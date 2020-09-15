@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
 	"net/http"
+	"strings"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
@@ -45,7 +48,7 @@ func oauthGithubHandler(w http.ResponseWriter, r *http.Request) {
 
 func oauthReceiveHandler(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
-	state := r.FormValue("0000")
+	state := r.FormValue("state")
 
 	// this would check the session id
 	if state != "0000" {
@@ -61,4 +64,20 @@ func oauthReceiveHandler(w http.ResponseWriter, r *http.Request) {
 
 	ts := githubOauthConfig.TokenSource(r.Context(), token)
 	client := oauth2.NewClient(r.Context(), ts)
+
+	requestBody := strings.NewReader(`{"query": "query {viewer {id}}"}`)
+	response, err := client.Post("https://api.github.com/graphql", "application/json", requestBody)
+	if err != nil {
+		http.Error(w, "Failed to retrieve user id", http.StatusBadRequest)
+		return
+	}
+	defer response.Body.Close()
+
+	bs, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		http.Error(w, "Failed to read github user information", http.StatusInternalServerError)
+		return
+	}
+
+	log.Println(string(bs))
 }
