@@ -242,6 +242,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	// safety check, only handle POST requests
+	if r.Method != http.MethodPost {
+		errorMsg := url.QueryEscape("HTTP method was not a POST")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
 	sid := ""
 	message := "Logged out"
 
