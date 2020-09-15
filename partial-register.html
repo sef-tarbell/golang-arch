@@ -1,13 +1,19 @@
-{{if .Success}}
-    <h1>Success!</h1>
-{{else}}
-    <h1>Register</h1>
-    <form method="POST">
-        <label>Name:</label><br />
-        <input type="text" name="name"><br />
-        <label>Email:</label><br />
-        <input type="text" name="email"><br />
-        <input type="hidden" name="user"><br />
-        <input type="submit">
-    </form>
-{{end}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.PageTitle}}</title>
+</head>
+<body>
+  <h3>Complete Your Profile</h3>
+  <form action="/oauth/amazon/register" method="POST">
+    <label for="firstname">First Name:</label>
+    <input type="text" name="firstname" value="{{.FirstName}}" id="firstname" /><br />
+    <label for="username">User Name:</label>
+    <input type="text" name="username" value="{{.UserName}}" id="username" /><br />
+    <input type="hidden" name="username" value="{{.SignedUserID}}" id="username" /><br />
+    <button type="submit">Complete Registration</button>
+  </form>
+</body>
+</html>

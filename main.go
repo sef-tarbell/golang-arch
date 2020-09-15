@@ -38,14 +38,16 @@ type IndexPageData struct {
 	Message   string
 }
 
+type PartialPageData struct {
+	PageTitle    string
+	FirstName    string
+	UserName     string
+	SignedUserID string
+}
+
 // key is username, value is userdata
 // initializing with test user
-var db = map[string]UserData{
-	"test@test.com": UserData{
-		UserName:  "test@test.com",
-		FirstName: "Test",
-	},
-}
+var db = map[string]UserData{}
 
 // key is sessionid, value is token
 var sessions = map[string]string{}
@@ -71,6 +73,7 @@ func main() {
 	http.HandleFunc("/logout", logout)
 	http.HandleFunc("/oauth/amazon/login", oauthAmazonLogin)
 	http.HandleFunc("/oauth/amazon/receive", oauthAmazonReceive)
+	http.HandleFunc("/oauth/amazon/register", oauthAmazonRegister)
 	http.HandleFunc("/partial-register", partialRegister)
 	http.ListenAndServe(":8080", nil)
 }
@@ -310,8 +313,22 @@ func oauthAmazonReceive(w http.ResponseWriter, r *http.Request) {
 	amazonID := p.UserID
 	userName, ok := oauthConnections[amazonID]
 	if !ok {
-		// use test user account
-		userName = "test@test.com"
+		// send to partial register create a new user
+		suid, err := createToken(amazonID)
+		if err != nil {
+			log.Println("Failed to create signed user id: ", err)
+			errorMsg := url.QueryEscape("Login with Amazon Failed")
+			http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+			return
+		}
+
+		params := url.Values{}
+		params.Add("suid", suid)
+		params.Add("name", p.Name)
+		params.Add("email", p.Email)
+
+		http.Redirect(w, r, "/partial-register?"+params.Encode(), http.StatusSeeOther)
+		return
 	}
 
 	err = createSession(userName, w)
@@ -345,5 +362,26 @@ func createSession(userName string, w http.ResponseWriter) error {
 }
 
 func partialRegister(w http.ResponseWriter, r *http.Request) {
-	//tmpl := template.Must(template.ParseFiles("partial-register.html"))
+	suid := r.FormValue("suid")
+	name := r.FormValue("name")
+	email := r.FormValue("email")
+
+	if suid == "" {
+		log.Println("Error in partialRegister, failed to receive signed user id")
+		errorMsg := url.QueryEscape("Failed to login with Amazon")
+		http.Redirect(w, r, "/?msg="+errorMsg, http.StatusSeeOther)
+		return
+	}
+
+	tmpl := template.Must(template.ParseFiles("partial-register.html"))
+	data := PartialPageData{
+		PageTitle:    "Complete Registration",
+		FirstName:    name,
+		UserName:     email,
+		SignedUserID: suid,
+	}
+	tmpl.Execute(w, data)
+}
+
+func oauthAmazonRegister(w http.ResponseWriter, r *http.Request) {
 }
